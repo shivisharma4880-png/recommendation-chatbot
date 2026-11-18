@@ -305,6 +305,84 @@ class ProductQuestionTests(unittest.TestCase):
     def test_buy_named_product_is_not_an_order(self):
         result, _ = run(ENGINE, "I want to buy Aura Minimal Analogue Watch")
         self.assertNotIn("order placed", result.reply.lower())
+        self.assertIn("check out", result.reply.lower())
+        self.assertNotIn("mock", result.reply.lower())
+        self.assertNotIn("demo", result.reply.lower())
+
+    def test_checkout_completes_without_keeping_details(self):
+        engine = ENGINE
+        watch = next(p for p in engine.products if "Aura Minimal" in p.product_name)
+        slots = ShopperSlots()
+        start = engine.handle_turn("t", f"I want to buy {watch.product_name}", slots)
+        self.assertEqual(slots.checkout_step, "name")
+        self.assertTrue(start.products)
+        engine.handle_turn("t", "Riya Sharma", slots)
+        self.assertEqual(slots.checkout_step, "address")
+        engine.handle_turn("t", "Mumbai", slots)
+        self.assertEqual(slots.checkout_step, "payment")
+        titles = [item["title"] for item in engine.handle_turn("t", "UPI", slots).follow_ups]
+        self.assertEqual(slots.checkout_step, "confirm")
+        self.assertIn("Place order", titles)
+        done = engine.handle_turn("t", "Place this order", slots)
+        self.assertIn("order confirmed", done.reply.lower())
+        self.assertIn(f"ord-{watch.product_id}".lower(), done.reply.lower())
+        self.assertNotIn("mock", done.reply.lower())
+        self.assertNotIn("demo", done.reply.lower())
+        self.assertNotIn("riya", done.reply.lower())
+        self.assertIsNotNone(done.confirmation)
+        self.assertEqual(done.confirmation["reference"], f"ORD-{watch.product_id}")
+        self.assertEqual(done.confirmation["name"], "Riya Sharma")
+        self.assertEqual(done.confirmation["address"], "Mumbai")
+        self.assertEqual(done.confirmation["payment"], "UPI")
+        self.assertEqual(done.confirmation["product_id"], watch.product_id)
+        self.assertIsNone(slots.checkout_step)
+        self.assertIsNone(slots.checkout_name)
+        self.assertIsNone(slots.checkout_address)
+        self.assertIsNone(slots.checkout_payment)
+        self.assertEqual(slots.intent, "shop")
+
+    def test_checkout_asks_listed_size(self):
+        engine = ENGINE
+        clothing = next(
+            p
+            for p in engine.products
+            if p.category in ("Ethnic wear", "Western wear")
+            and "," in p.sizes_raw
+            and "one size" not in p.sizes_raw.lower()
+        )
+        slots = ShopperSlots()
+        result = engine.handle_turn("t", f"Checkout {clothing.product_name}", slots)
+        self.assertEqual(slots.checkout_step, "size")
+        self.assertIn("listed size", result.reply.lower())
+        titles = [item["title"] for item in result.follow_ups]
+        first_size = clothing.sizes_raw.split(",")[0].strip()
+        self.assertTrue(any(first_size.upper() in title.upper() for title in titles))
+        next_turn = engine.handle_turn("t", f"Size {first_size}", slots)
+        self.assertEqual(slots.checkout_step, "name")
+        self.assertEqual(slots.checkout_size.upper(), first_size.upper())
+        self.assertIn("name", next_turn.reply.lower())
+
+    def test_checkout_city_is_not_treated_as_delivery_faq(self):
+        slots = ShopperSlots()
+        ENGINE.handle_turn("t", "I want to buy Aura Minimal Analogue Watch", slots)
+        ENGINE.handle_turn("t", "Riya Sharma", slots)
+        result = ENGINE.handle_turn("t", "Mumbai", slots)
+        self.assertEqual(slots.checkout_step, "payment")
+        self.assertIn("pay", result.reply.lower())
+        self.assertNotIn("pin code", result.reply.lower())
+        titles = [item["title"] for item in result.follow_ups]
+        self.assertIn("UPI", titles)
+        self.assertIn("Cash on delivery", titles)
+
+    def test_checkout_cancel_and_cheaper_abort(self):
+        slots = ShopperSlots()
+        ENGINE.handle_turn("t", "I want to buy Aura Minimal Analogue Watch", slots)
+        cancelled = ENGINE.handle_turn("t", "Cancel checkout", slots)
+        self.assertIsNone(slots.checkout_step)
+        self.assertIn("cancelled", cancelled.reply.lower())
+        ENGINE.handle_turn("t", "I want to buy Aura Minimal Analogue Watch", slots)
+        ENGINE.handle_turn("t", "Show me cheaper options", slots)
+        self.assertIsNone(slots.checkout_step)
 
 
 class FAQTests(unittest.TestCase):
@@ -439,6 +517,35 @@ class GuardAndFallbackTests(unittest.TestCase):
 
 
 class SessionStoreTests(unittest.TestCase):
+    def test_checkout_details_are_not_written_to_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "s.json"
+            store = SessionStore(path)
+            slots = store.get("c")
+            slots.budget_max = 2000
+            slots.checkout_step = "name"
+            slots.checkout_product_id = "A003"
+            slots.checkout_name = "Riya Sharma"
+            slots.checkout_address = "Mumbai"
+            slots.checkout_payment = "UPI"
+            slots.last_question_asked = "What name should I put on this order?"
+            slots.history = [
+                "user: Riya Sharma",
+                "assistant: Which city should I deliver to?",
+            ]
+            store.update("c", slots)
+            raw = path.read_text(encoding="utf-8")
+            self.assertNotIn("Riya", raw)
+            self.assertNotIn("Mumbai", raw)
+            self.assertNotIn("UPI", raw)
+            loaded = SessionStore(path).get("c")
+            self.assertEqual(loaded.budget_max, 2000)
+            self.assertIsNone(loaded.checkout_step)
+            self.assertIsNone(loaded.checkout_name)
+            self.assertIsNone(loaded.checkout_address)
+            self.assertIsNone(loaded.checkout_payment)
+            self.assertIsNone(loaded.last_question_asked)
+
     def test_persist_reload_and_reset(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "s.json"
@@ -536,6 +643,19 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(r.json()["context"]["budget_max"], 6000)
         r = self.client.post("/api/chat", json={"message": "hello", "session_id": "iso1"})
         self.assertEqual(r.json()["context"]["budget_max"], 2000)
+
+    def test_checkout_page_and_product_api(self):
+        page = self.client.get("/checkout")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("checkout-form", page.text)
+        product = self.client.get("/api/product/F001")
+        self.assertEqual(product.status_code, 200)
+        data = product.json()
+        self.assertEqual(data["product_id"], "F001")
+        self.assertIn("size_options", data)
+        self.assertTrue(data.get("image_url"))
+        missing = self.client.get("/api/product/NOPE")
+        self.assertEqual(missing.status_code, 404)
 
 
 class TelegramSplitTests(unittest.TestCase):

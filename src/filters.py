@@ -56,6 +56,12 @@ class ShopperSlots:
     no_match_streak: int = 0  # consecutive turns that found nothing (to stop "change a requirement" loops)
     last_blocker: Optional[str] = None  # the constraint that blocked the last empty search
     style_asked: bool = False  # gift flow: the traditional/minimal/statement question was already asked once
+    checkout_step: Optional[str] = None  # size | name | address | payment | confirm; live only, never saved
+    checkout_product_id: Optional[str] = None
+    checkout_size: Optional[str] = None
+    checkout_name: Optional[str] = None
+    checkout_address: Optional[str] = None
+    checkout_payment: Optional[str] = None
 
     def canonicalise(self) -> None:
         """Re-validate every saved value so sessions written by older code (category "clothing",
@@ -97,6 +103,12 @@ class ShopperSlots:
                 "last_outfit_prices",
                 "compare_ids",
                 "awaiting_compare",
+                "checkout_step",
+                "checkout_product_id",
+                "checkout_size",
+                "checkout_name",
+                "checkout_address",
+                "checkout_payment",
             }:
                 setattr(self, key, value)
 
@@ -282,6 +294,22 @@ def _type_blob(product: Product) -> str:
     return (product.product_type + " " + product.product_name).lower()
 
 
+def footwear_family(product: Product) -> Optional[str]:
+    """Closed shoes, sports shoes, flats and sandals stay in separate families."""
+    if product.category != "Footwear":
+        return None
+    blob = _type_blob(product)
+    if any(marker in blob for marker in ("sandal", "chappal")) or re.search(r"\bheels?\b", blob):
+        return "sandals"
+    if any(marker in blob for marker in ("flat", "ballet")):
+        return "flats"
+    if any(marker in blob for marker in ("running", "training", "sports shoe", "sport shoe", "trail", "walking")):
+        return "sports shoes"
+    if any(marker in blob for marker in ("sneaker", "casual shoe")):
+        return "sneakers"
+    return "shoes"
+
+
 def category_matches(product: Product, category: Optional[str], product_type: Optional[str]) -> bool:
     cat = canonical_category(category)
     if cat and product.category != cat:
@@ -293,16 +321,26 @@ def category_matches(product: Product, category: Optional[str], product_type: Op
         blob = _type_blob(product)
         if canon:
             aliases = TYPE_ALIASES[canon][0]
+            family = footwear_family(product)
             if canon == "shoes":
-                if product.category != "Footwear":
-                    return False
-            elif canon == "sports shoes":
-                if not any(a in blob for a in ("running", "training", "sports", "trail")):
-                    return False
-            elif canon == "jewellery":
-                if product.category != "Jewellery":
-                    return False
-            elif not any(alias in blob for alias in aliases):
+                return family in {"shoes", "sneakers", "sports shoes"}
+            if canon == "sneakers":
+                return family == "sneakers"
+            if canon == "sports shoes":
+                return family == "sports shoes"
+            if canon == "flats":
+                return family == "flats"
+            if canon == "sandals":
+                return family == "sandals"
+            if canon == "shirt":
+                return "shirt" in blob and "dress" not in blob and "t-shirt" not in blob and "tee" not in blob
+            if canon == "tshirt":
+                return any(token in blob for token in ("t-shirt", "tee"))
+            if canon == "trousers":
+                return any(token in blob for token in ("trousers", "pants")) and "culotte" not in blob
+            if canon == "jewellery":
+                return product.category == "Jewellery"
+            if not any(alias in blob for alias in aliases):
                 return False
         else:
             raw = str(product_type).strip().lower()

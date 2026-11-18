@@ -32,7 +32,7 @@ class NoStoreWebAssets(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
         path = request.url.path
-        if path == "/" or path.startswith("/static/"):
+        if path == "/" or path == "/checkout" or path.startswith("/static/"):
             response.headers["Cache-Control"] = NO_STORE
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
@@ -78,6 +78,11 @@ def index() -> FileResponse:
     return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
 
+@app.get("/checkout")
+def checkout_page() -> FileResponse:
+    return FileResponse(WEB_DIR / "checkout.html", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/product-image/{product_id}")
 def product_image(product_id: str) -> FileResponse:
     safe_id = "".join(ch for ch in product_id if ch.isalnum())
@@ -116,6 +121,31 @@ def catalogue() -> dict:
     return catalogue_payload()
 
 
+def _find_product(product_id: str):
+    needle = "".join(ch for ch in product_id if ch.isalnum()).upper()
+    if not needle:
+        return None
+    for product in engine.products:
+        if product.product_id.upper() == needle:
+            return product
+    return None
+
+
+@app.get("/api/product/{product_id}")
+def product_detail(product_id: str) -> dict:
+    from src.checkout import is_one_size, listed_size_options
+
+    product = _find_product(product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Unknown product")
+    return {
+        **product.to_dict(),
+        **visual_for(product),
+        "size_options": listed_size_options(product),
+        "one_size": is_one_size(product),
+    }
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {
@@ -149,6 +179,7 @@ def chat(req: ChatRequest) -> dict:
         "sentiment": result.sentiment,
         "handoff": result.handoff,
         "comparison": result.comparison,
+        "confirmation": result.confirmation,
     }
 
 

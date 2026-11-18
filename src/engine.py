@@ -9,6 +9,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+from src import checkout
 from src import guards
 from src.catalogue import FAQ, Product, get_catalogue
 from src.faq_match import match_faq
@@ -80,6 +81,7 @@ class TurnResult:
     sentiment: str = "neutral"
     handoff: bool = False
     comparison: Optional[dict] = None
+    confirmation: Optional[dict] = None
 
 
 BUDGET_FOLLOW_UPS = [
@@ -131,6 +133,7 @@ GIFT_STYLE_FOLLOW_UPS = [
     {"title": "Statement", "emoji": "✨", "text": "Statement style"},
 ]
 FOOTWEAR_REFINE_FOLLOW_UPS = [
+    {"title": "Checkout", "emoji": "🛍️", "text": "Checkout this item"},
     {"title": "Cheaper", "emoji": "💸", "text": "Show me cheaper options"},
     {"title": "Compare", "emoji": "⚖️", "text": "I want to compare products"},
     {"title": "Another colour", "emoji": "🎨", "text": "I want to change the colour"},
@@ -141,6 +144,7 @@ ACCESSORY_FOLLOW_UPS = [
     {"title": "No thanks", "text": "No, skip accessories"},
 ]
 REFINE_FOLLOW_UPS = [
+    {"title": "Checkout", "emoji": "🛍️", "text": "Checkout this item"},
     {"title": "Cheaper", "emoji": "💸", "text": "Show me cheaper options"},
     {"title": "Compare", "emoji": "⚖️", "text": "I want to compare products"},
     {"title": "Minimal", "emoji": "◻️", "text": "I prefer a minimal style"},
@@ -186,7 +190,8 @@ SPECIFIC_INTENTS = {
     "handoff",
 }
 THIS_ONE = re.compile(
-    r"\b(this one|that one|the first|i['’]?ll take it|i will take it|buy it|purchase it)\b",
+    r"\b(this one|that one|the first|i['’]?ll take it|i will take it|buy it|purchase it|"
+    r"checkout this|check out this)\b",
     re.I,
 )
 COMPARE_THESE = re.compile(
@@ -634,8 +639,14 @@ class RecommendationEngine:
 
     def _follow_ups(self, slots: ShopperSlots, question: Optional[str] = None) -> list[dict]:
         question = question or slots.last_question_asked
+        if slots.checkout_step:
+            product = self._product_by_id(slots.checkout_product_id)
+            return checkout.follow_ups(slots, product)
         if question:
             q = question.lower()
+            if checkout.is_checkout_question(question):
+                product = self._product_by_id(slots.checkout_product_id)
+                return checkout.follow_ups(slots, product)
             if question == TYPE_QUESTION or "which type would you like" in q:
                 return self._with_back(self._type_menu_follow_ups(slots))
             if question == MAIN_MENU_QUESTION or "occasions, accessories, or footwear" in q:
@@ -691,9 +702,10 @@ class RecommendationEngine:
         products: Optional[list[dict]] = None,
         question: Optional[str] = None,
         comparison: Optional[dict] = None,
+        confirmation: Optional[dict] = None,
     ) -> TurnResult:
         packed = list(products or [])
-        if packed and comparison is None:
+        if packed and comparison is None and confirmation is None and not slots.checkout_step:
             packed = self._products_named_in_reply(reply, packed)
         if packed:
             slots.last_products = packed
@@ -721,6 +733,7 @@ class RecommendationEngine:
             sentiment=slots.sentiment,
             handoff=slots.handoff_requested,
             comparison=comparison,
+            confirmation=confirmation,
         )
 
     # ------------------------------------------------------------------ questions
@@ -1071,11 +1084,148 @@ class RecommendationEngine:
         return None
 
     def _buy_text(self, product: Product) -> str:
-        return (
-            f"{product.product_name} ({product.product_id}) is listed at ₹{product.price_inr}, "
-            f"sizes {product.sizes_raw}, {product.stock_status}. "
-            "This demo cannot place an order or take payment. Confirm with the seller before buying."
+        return checkout.intro(product)
+
+    def _start_checkout(self, product: Product, slots: ShopperSlots) -> TurnResult:
+        slots.awaiting_compare = False
+        slots.compare_ids = []
+        checkout.start(slots, product)
+        payload = [self._product_payload(product, slots)]
+        question = checkout.question_for(slots.checkout_step)
+        slots.last_question_asked = question
+        text = checkout.ask_text(product, slots, include_intro=True)
+        return self._pack(self._tone_prefix(slots) + text, slots, payload, question=question)
+
+    def _checkout_payload(self, product: Product, slots: ShopperSlots) -> list[dict]:
+        return [self._product_payload(product, slots)]
+
+    def _checkout_ask(
+        self,
+        product: Product,
+        slots: ShopperSlots,
+        *,
+        include_intro: bool = False,
+        retry: Optional[str] = None,
+    ) -> TurnResult:
+        question = checkout.question_for(slots.checkout_step)
+        slots.last_question_asked = question
+        slots.intent = "buy"
+        text = checkout.ask_text(product, slots, include_intro=include_intro, retry=retry)
+        return self._pack(self._tone_prefix(slots) + text, slots, self._checkout_payload(product, slots), question=question)
+
+    def _checkout_cancel(self, product: Product, slots: ShopperSlots) -> TurnResult:
+        checkout.clear(slots)
+        slots.intent = "shop"
+        slots.last_question_asked = None
+        text = checkout.cancel_text(product)
+        return self._pack(self._tone_prefix(slots) + text, slots, self._checkout_payload(product, slots))
+
+    def _checkout_turn(
+        self,
+        message: str,
+        parse_text: str,
+        nlu,
+        slots: ShopperSlots,
+        parsed: dict,
+    ) -> Optional[TurnResult]:
+        product = self._product_by_id(slots.checkout_product_id)
+        if not product:
+            checkout.clear(slots)
+            return None
+        if GO_BACK.match(message):
+            checkout.clear(slots)
+            return self._go_back(slots)
+        if checkout.is_cancel(message):
+            return self._checkout_cancel(product, slots)
+        if nlu.intent == "buy":
+            other = self._buy_product(message, slots)
+            if other and other.product_id != product.product_id:
+                return self._start_checkout(other, slots)
+            return self._checkout_ask(product, slots)
+        if nlu.intent in {"compare", "browse", "handoff"} or CHEAPER.search(parse_text) or SIMILAR.search(parse_text):
+            checkout.clear(slots)
+            return None
+        looks_like_question = "?" in message or re.search(
+            r"\b(how long|what is|what's|when will|return policy|size chart)\b", parse_text
         )
+        if looks_like_question:
+            exact_faq = next((f for f in self.faqs if _plain(f.question) == _plain(message)), None)
+            faq = exact_faq or match_faq(message, self.faqs, str(parsed.get("faq_topic") or "") or None)
+            if faq:
+                return self._faq_reply(faq, slots)
+        return self._checkout_advance(message, slots, product)
+
+    def _checkout_advance(self, message: str, slots: ShopperSlots, product: Product) -> TurnResult:
+        step = slots.checkout_step
+        if step == "size":
+            size = checkout.parse_size_answer(message, product)
+            if not size:
+                return self._checkout_ask(
+                    product,
+                    slots,
+                    retry=f"{product.product_name} is listed in {product.sizes_raw}. Pick one of those listed sizes.",
+                )
+            slots.checkout_size = size
+            slots.size = size
+            slots.checkout_step = "name"
+            return self._checkout_ask(product, slots)
+        if step == "name":
+            name = checkout.parse_name(message)
+            if not name:
+                return self._checkout_ask(
+                    product,
+                    slots,
+                    retry=f"I need a name for this order of {product.product_name}.",
+                )
+            slots.checkout_name = name
+            slots.checkout_step = "address"
+            return self._checkout_ask(product, slots)
+        if step == "address":
+            address = checkout.parse_address(message)
+            if not address:
+                return self._checkout_ask(
+                    product,
+                    slots,
+                    retry=f"Which city should I deliver {product.product_name} to?",
+                )
+            slots.checkout_address = address
+            slots.checkout_step = "payment"
+            return self._checkout_ask(product, slots)
+        if step == "payment":
+            payment = checkout.parse_payment(message)
+            if not payment:
+                return self._checkout_ask(
+                    product,
+                    slots,
+                    retry=f"Pick UPI, card, or cash on delivery for {product.product_name}.",
+                )
+            slots.checkout_payment = payment
+            slots.checkout_step = "confirm"
+            return self._checkout_ask(product, slots)
+        if step == "confirm":
+            if checkout.is_decline(message):
+                return self._checkout_cancel(product, slots)
+            if not checkout.is_confirm(message):
+                return self._checkout_ask(
+                    product,
+                    slots,
+                    retry=f"Reply yes to place this order of {product.product_name}, or cancel.",
+                )
+            payload = self._checkout_payload(product, slots)
+            extra = payload[0] if payload else {}
+            confirmation = checkout.confirmation_payload(product, slots, extra)
+            text = checkout.done_text(product)
+            checkout.clear(slots)
+            slots.intent = "shop"
+            slots.last_question_asked = None
+            return self._pack(
+                self._tone_prefix(slots) + text,
+                slots,
+                payload,
+                confirmation=confirmation,
+            )
+        checkout.clear(slots)
+        return self._checkout_cancel(product, slots)
 
     def _product_facts(self, product: Product, attrs: list[str], message: str) -> str:
         label = f"{product.product_name} ({product.product_id})"
@@ -1465,7 +1615,7 @@ class RecommendationEngine:
         masked = self._mask_product_names(message) if named_products else message
         nlu = understand(masked)
         parse_text = nlu.corrected or message.lower()
-        parsed = self._llm_parse(masked if named_products else message, slots)
+        parsed = {} if slots.checkout_step else self._llm_parse(masked if named_products else message, slots)
 
         # ---- human handoff: explicit request (regex) or repeated frustration; never on an LLM guess alone
         explicit_handoff = bool(nlu.handoff or nlu.intent == "handoff")
@@ -1490,6 +1640,10 @@ class RecommendationEngine:
                 "Hi! I can shortlist women's ethnic and western outfits, jewellery, watches, bags and footwear "
                 "from our catalogue. What are you looking for?",
             )
+        if slots.checkout_step:
+            checkout_result = self._checkout_turn(message, parse_text, nlu, slots, parsed)
+            if checkout_result is not None:
+                return checkout_result
         if GO_BACK.match(message):
             return self._go_back(slots)
         if THANKS.match(message) and not slots.last_question_asked:
@@ -1572,18 +1726,7 @@ class RecommendationEngine:
         if intent == "buy":
             target = self._buy_product(message, slots)
             if target:
-                product_dicts = [self._product_payload(target, slots)]
-                reply = self._catalogue_reply(
-                    slots,
-                    product_dicts,
-                    "The shopper wants to buy this item. Do not complete a purchase. "
-                    "Quote only listed price, sizes and stock from the catalogue row.",
-                    self._buy_text(target),
-                    message,
-                )
-                if "order" not in reply.lower():
-                    reply += " This demo cannot place an order or take payment."
-                return self._pack(reply, slots, product_dicts)
+                return self._start_checkout(target, slots)
 
         if intent == "accessories_yes" and accessory_pending:
             slots.last_question_asked = None
@@ -1649,9 +1792,6 @@ class RecommendationEngine:
             )
         if any(p.category == "Footwear" for p in shortlist) and len(shortlist) > 1:
             instruction += " Add one short trade-off note (price, listed features or tags only); no health or injury claims."
-        if slots.intent == "buy":
-            instruction += " End by saying this demo cannot place an order."
-
         product_dicts = [self._product_payload(p, slots) for p in shortlist]
         base = self._template_recommendations(shortlist, slots)
         if offer_now:

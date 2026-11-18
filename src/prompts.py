@@ -60,7 +60,7 @@ Field rules:
 - size: copy what the shopper said ("M", "M, L", "UK 6", "2.6"); several sizes are allowed. Never invent a size.
 - off_catalogue = true if they ask for something this shop never sells (perfume, electronics, men's clothing, jeans, jackets, etc.); the shop sells only women's ethnic and western outfits, jewellery, watches, bags/clutches and footwear.
 - intent handoff ONLY if the shopper explicitly asks for a human/agent/customer care. intent buy only when they want to purchase a specific item. intent faq for questions about delivery, returns, care, stock, sizing help, authenticity.
-Intent guide: browse = looking around; compare = difference / vs / which is better; buy = purchase or checkout; shop = find or recommend; handoff = wants a human.
+Intent guide: browse = looking around; compare = difference / vs / which is better; buy = purchase or checkout (the engine drives checkout; never invent payment success or an order); shop = find or recommend; handoff = wants a human.
 Parse INR budgets like "under 10000", "₹3,000", "1000", "1000 rupees", "2k", "under my budget of 4000"; budget_max must be a number that appears in the shopper message. A bangle size like 2.6 is a size, NOT a budget.
 If last_question_asked is about the outfit/occasion (for example "What is the outfit for"), set occasion from the answer (festive, office, casual, wedding, party, sports). Do NOT set change_field or intent change_requirement.
 If last_question_asked is about budget, a bare number is budget_max. Do NOT set change_field.

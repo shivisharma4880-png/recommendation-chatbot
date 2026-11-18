@@ -433,7 +433,7 @@ function renderCarousel(products) {
       <p>${escapeHtml(p.key_features || "")}</p>
       ${p.why ? `<p class="why">${escapeHtml(p.why)}</p>` : ""}
       <div class="card-actions">
-        <button type="button" class="quick" data-msg="I want to buy ${escapeHtml(p.product_name)}">This one</button>
+        <button type="button" class="quick" data-msg="Checkout ${escapeHtml(p.product_name)}">Checkout</button>
         <button type="button" class="quick compare-toggle">${selected ? "Selected" : "Compare"}</button>
       </div>
     `;
@@ -449,7 +449,7 @@ function renderCarousel(products) {
         showNudge(
           `Still looking at ${p.product_name}? Pick another catalogue product with Compare, or ask for a cheaper option.`,
           [
-            { title: "This one", text: `I want to buy ${p.product_name}` },
+            { title: "Checkout", text: `Checkout ${p.product_name}` },
             { title: "⚖️ Compare", text: "I want to compare products" },
             { title: "💸 Cheaper", text: "Show me cheaper options" },
           ]
@@ -505,13 +505,20 @@ function productsNamedInReply(text, products) {
     });
 }
 
-function appendMessage(role, text, products, handoff, comparison) {
+function appendMessage(role, text, products, handoff, comparison, confirmation) {
   const row = document.createElement("div");
   row.className = `row ${role}`;
   const bubble = document.createElement("div");
   bubble.className = handoff ? "bubble handoff" : "bubble";
   bubble.textContent = text;
   row.appendChild(bubble);
+
+  if (confirmation) {
+    row.appendChild(renderOrderConfirmation(confirmation));
+    thread.appendChild(row);
+    scrollThread();
+    return;
+  }
 
   const table = comparison ? renderComparison(comparison) : null;
   if (table) row.appendChild(table);
@@ -540,7 +547,7 @@ function maybeAttachCompare(message) {
 
 function optionButtons() {
   return document.querySelectorAll(
-    "#prompts .prompt, .card-actions .quick, .carousel-nav, #compare-go, #compare-clear, #compare-add-go, .look-ask, .type-ask, .cat-ask"
+    "#prompts .prompt, .card-actions .quick, .carousel-nav, #compare-go, #compare-clear, #compare-add-go, .look-ask, .look-checkout, .type-ask, .cat-ask"
   );
 }
 
@@ -593,7 +600,7 @@ async function sendMessage(text, selectedButton) {
     typing.remove();
     state.lastProducts = data.products || [];
     if (data.comparison) clearComparePicks();
-    appendMessage("assistant", data.reply, data.products, data.handoff, data.comparison);
+    appendMessage("assistant", data.reply, data.products, data.handoff, data.comparison, data.confirmation);
     renderPrefs(data.context || {});
     if (!renderFollowUps(data.follow_ups)) {
       renderPrompts();
@@ -759,7 +766,10 @@ function renderShelf() {
               <span>${escapeHtml(product.stock_status)}</span>
             </div>
             <p class="look-meta">${escapeHtml(product.product_id)} · ${escapeHtml(product.product_type)}</p>
-            <button type="button" class="look-ask">💬 Chat</button>
+            <div class="look-actions">
+              <button type="button" class="look-ask">💬 Chat</button>
+              <a class="look-checkout" href="/checkout?product=${encodeURIComponent(product.product_id)}">Checkout</a>
+            </div>
           </div>
         `;
         const img = card.querySelector("img");

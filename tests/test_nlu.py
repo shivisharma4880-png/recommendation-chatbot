@@ -93,13 +93,19 @@ class NLUTests(unittest.TestCase):
         ids = {item["product_id"] for item in result.products}
         self.assertEqual(ids, {first.product_id, second.product_id})
 
-    def test_buy_does_not_place_an_order(self):
+    def test_buy_starts_checkout(self):
         engine = RecommendationEngine(catalogue_path=ROOT / "fashion_chatbot_catalogue_faqs.xlsx")
         slots = ShopperSlots()
         result = engine.handle_turn("nlu", "I want to buy Aura Minimal Analogue Watch", slots)
         self.assertEqual(result.intent, "buy")
         self.assertTrue(result.products)
-        self.assertIn("cannot place an order", result.reply.lower())
+        self.assertIn("check out", result.reply.lower())
+        self.assertNotIn("mock", result.reply.lower())
+        self.assertNotIn("demo", result.reply.lower())
+        self.assertNotIn("cannot place an order", result.reply.lower())
+        self.assertEqual(slots.checkout_step, "name")
+        titles = [item["title"] for item in result.follow_ups]
+        self.assertIn("Cancel", titles)
 
     def test_repeated_frustration_triggers_handoff(self):
         engine = RecommendationEngine(catalogue_path=ROOT / "fashion_chatbot_catalogue_faqs.xlsx")

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>Checkout · Shivi's Product Assistant Bot</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css?v=34" />
+  </head>
+  <body>
+    <div class="page checkout-page">
+      <header class="site-header">
+        <span class="mark" aria-hidden="true"></span>
+        <div>
+          <h1>Checkout</h1>
+          <p>Place your order for a catalogue item</p>
+        </div>
+        <a class="header-back" href="/">← Catalogue</a>
+      </header>
+
+      <p id="checkout-status" class="shelf-status">Loading product…</p>
+
+      <section id="checkout-panel" class="checkout-panel" hidden>
+        <article class="checkout-item">
+          <div class="checkout-visual">
+            <img id="checkout-image" alt="" />
+          </div>
+          <div>
+            <h2 id="checkout-name"></h2>
+            <p id="checkout-meta" class="look-meta"></p>
+            <p id="checkout-id" class="look-meta"></p>
+          </div>
+        </article>
+
+        <form id="checkout-form" class="checkout-form">
+          <fieldset id="size-field">
+            <legend><span aria-hidden="true">📏</span> Size</legend>
+            <p id="size-hint" class="field-hint"></p>
+            <div id="size-chips" class="choice-chips"></div>
+          </fieldset>
+
+          <label class="field">
+            <span><span aria-hidden="true">👤</span> Name on the order</span>
+            <input id="order-name" name="name" type="text" maxlength="40" autocomplete="name" required />
+          </label>
+
+          <fieldset>
+            <legend><span aria-hidden="true">📍</span> City</legend>
+            <div id="city-chips" class="choice-chips"></div>
+            <div class="city-suggest">
+              <input
+                id="order-city"
+                name="city"
+                type="text"
+                maxlength="80"
+                placeholder="Or type another city"
+                autocomplete="off"
+                spellcheck="false"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded="false"
+                aria-controls="city-suggest-list"
+                required
+              />
+              <ul id="city-suggest-list" class="city-suggest-list" role="listbox" hidden></ul>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend><span aria-hidden="true">💳</span> Payment</legend>
+            <div id="payment-chips" class="choice-chips"></div>
+          </fieldset>
+
+          <p id="checkout-error" class="checkout-error" hidden></p>
+          <button type="submit" id="place-order">Place order</button>
+        </form>
+      </section>
+
+      <section id="checkout-done" class="checkout-done" hidden>
+        <div id="checkout-receipt"></div>
+        <a class="keep-shopping" href="/">Keep shopping</a>
+      </section>
+    </div>
+    <script src="/static/indian-cities.js?v=34"></script>
+    <script src="/static/order-card.js?v=34"></script>
+    <script src="/static/checkout.js?v=34"></script>
+  </body>
+</html>

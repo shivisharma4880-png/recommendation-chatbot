@@ -89,10 +89,32 @@ def format_comparison(comparison: dict) -> str:
     return "\n\n".join(lines)
 
 
+def format_confirmation(confirmation: dict) -> str:
+    rows = [
+        ("✅", "Status", "Order confirmed"),
+        ("🔖", "Reference", confirmation.get("reference") or ""),
+        ("🛍️", "Item", f"{confirmation.get('product_name') or ''} ({confirmation.get('product_id') or ''})".strip()),
+        ("💰", "Price", f"₹{confirmation.get('price_inr')}" if confirmation.get("price_inr") is not None else ""),
+        ("🎨", "Colour", confirmation.get("colour") or ""),
+        ("📏", "Size", confirmation.get("size") or ""),
+        ("👤", "Name", confirmation.get("name") or ""),
+        ("📍", "City", confirmation.get("address") or ""),
+        ("💳", "Payment", confirmation.get("payment") or ""),
+    ]
+    lines = ["<b>Order confirmation</b>"]
+    for icon, label, value in rows:
+        if not value:
+            continue
+        lines.append(f"{icon} <b>{html.escape(str(label))}</b> {html.escape(str(value))}")
+    return "\n".join(lines)
+
+
 def format_turn(result: TurnResult) -> str:
     reply = html.escape(result.reply)
     if result.handoff:
         reply = f"{reply}\n\n<i>Human handoff flagged. This demo cannot open a live agent chat.</i>"
+    if result.confirmation:
+        return f"{reply}\n\n{format_confirmation(result.confirmation)}"
     if result.comparison:
         table = format_comparison(result.comparison)
         if table:

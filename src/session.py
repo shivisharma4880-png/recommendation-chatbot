@@ -11,6 +11,7 @@ from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Dict
 
+from src.checkout import CHECKOUT_DISK_FIELDS, QUESTION_MARKERS, is_checkout_question
 from src.filters import ShopperSlots
 
 SESSION_PATH = Path(__file__).resolve().parent.parent / "data" / "sessions.json"
@@ -62,8 +63,31 @@ class SessionStore:
         while len(self._cache) > MAX_SESSIONS:
             self._cache.popitem(last=False)
 
+    def _slots_to_disk(self, slots: ShopperSlots) -> dict:
+        """Drop checkout answers so name, address and payment never hit disk."""
+        data = asdict(slots)
+        secrets = [
+            str(data[key]).strip()
+            for key in ("checkout_name", "checkout_address", "checkout_payment")
+            if data.get(key)
+        ]
+        for key in CHECKOUT_DISK_FIELDS:
+            data[key] = None
+        if is_checkout_question(data.get("last_question_asked")):
+            data["last_question_asked"] = None
+        history = []
+        for line in data.get("history") or []:
+            low = str(line).lower()
+            if any(marker in low for marker in QUESTION_MARKERS):
+                continue
+            if secrets and any(secret.lower() in low for secret in secrets):
+                continue
+            history.append(line)
+        data["history"] = history
+        return data
+
     def _save(self) -> None:
-        serializable = {cid: asdict(slots) for cid, slots in self._cache.items()}
+        serializable = {cid: self._slots_to_disk(slots) for cid, slots in self._cache.items()}
         payload = json.dumps(serializable, indent=2, ensure_ascii=False)
         fd, tmp_name = tempfile.mkstemp(dir=str(self.path.parent), prefix=".sessions-", suffix=".tmp")
         try:

@@ -45,6 +45,29 @@ class TelegramUiTests(unittest.TestCase):
         self.assertIn("₹599", text)
         self.assertIn("Anvi Crystal Studs (J010)", text)
 
+    def test_format_turn_prefers_confirmation_receipt(self):
+        result = TurnResult(
+            reply="Order confirmed for Aarohi Peach Anarkali (F001). Reference ORD-F001.",
+            products=[{"product_id": "F001", "product_name": "Aarohi Peach Anarkali"}],
+            confirmation={
+                "reference": "ORD-F001",
+                "product_id": "F001",
+                "product_name": "Aarohi Peach Anarkali",
+                "price_inr": 4999,
+                "colour": "Peach",
+                "size": "M",
+                "name": "Riya Sharma",
+                "address": "Mumbai",
+                "payment": "UPI",
+            },
+        )
+        text = format_turn(result)
+        self.assertIn("<b>Order confirmation</b>", text)
+        self.assertIn("ORD-F001", text)
+        self.assertIn("Riya Sharma", text)
+        self.assertIn("📏", text)
+        self.assertIn("💳", text)
+
     def test_format_turn_includes_products(self):
         result = TurnResult(
             reply="Here are options from our catalogue:",

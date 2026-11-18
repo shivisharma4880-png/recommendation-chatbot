@@ -182,6 +182,53 @@ class CatalogueTests(unittest.TestCase):
             matches = filter_products(self.products, slots, include_accessories=include_acc)
             self.assertTrue(matches, msg=f"no products for {slots}")
 
+    def _types(self, product_type, **kwargs):
+        slots = ShopperSlots(category="Footwear", product_type=product_type, **kwargs)
+        return filter_products(self.products, slots)
+
+    def test_shoes_do_not_mix_sandals_or_flats(self):
+        for ptype in ("shoes", "sneakers", "casual shoes", "sports shoes"):
+            matches = self._types(ptype)
+            self.assertTrue(matches, msg=f"no products for {ptype}")
+            for product in matches:
+                blob = f"{product.product_type} {product.product_name}".lower()
+                self.assertNotIn("sandal", blob, msg=f"{ptype} leaked {product.product_id}")
+                self.assertNotIn("flat", blob, msg=f"{ptype} leaked {product.product_id}")
+        sneakers = {p.product_id for p in self._types("sneakers")}
+        self.assertEqual(sneakers, {"S005", "S012", "S013"})
+        sports = {p.product_id for p in self._types("sports shoes")}
+        self.assertIn("S002", sports)  # walking shoes stay with sports, not casual sneakers
+        self.assertTrue(sports.isdisjoint({"S005", "S010", "S011", "S012", "S013"}))
+        sandals = {p.product_id for p in self._types("sandals")}
+        self.assertEqual(sandals, {"S010", "S011"})
+        flats = {p.product_id for p in self._types("flats")}
+        self.assertEqual(flats, {"S008", "S009"})
+        shoes = {p.product_id for p in self._types("shoes")}
+        self.assertTrue(shoes)
+        self.assertTrue(shoes.isdisjoint({"S008", "S009", "S010", "S011"}))
+
+    def test_shirt_does_not_mix_tshirts_or_shirt_dresses(self):
+        matches = filter_products(self.products, ShopperSlots(category="Western wear", product_type="shirt"))
+        self.assertTrue(matches)
+        for product in matches:
+            blob = f"{product.product_type} {product.product_name}".lower()
+            self.assertIn("shirt", blob)
+            self.assertNotIn("dress", blob)
+            self.assertNotIn("tee", blob)
+            self.assertNotIn("t-shirt", blob)
+
+    def test_casual_shoes_recommendation_excludes_sandals(self):
+        engine = RecommendationEngine(catalogue_path=ROOT / "fashion_chatbot_catalogue_faqs.xlsx")
+        slots = ShopperSlots()
+        engine.handle_turn("t", "Show me casual shoes or sneakers from the catalogue.", slots)
+        engine.handle_turn("t", "10000", slots)
+        result = engine.handle_turn("t", "UK 5", slots)
+        self.assertTrue(result.products)
+        for product in result.products:
+            blob = f"{product.get('product_type', '')} {product.get('product_name', '')}".lower()
+            self.assertNotIn("sandal", blob)
+            self.assertNotIn("flat", blob)
+
     def test_bare_budget_moves_past_budget_question(self):
         engine = RecommendationEngine(catalogue_path=ROOT / "fashion_chatbot_catalogue_faqs.xlsx")
         slots = ShopperSlots()
