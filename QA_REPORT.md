@@ -1,0 +1,90 @@
+# QA report — Recommendation chatbot (Shivi's Product Assistant)
+
+Scope: full read of the workbook (Products 48 rows, FAQs 32, Personas 6), both PDFs and all code; the running web app
+(`http://127.0.0.1:8000`, real Groq key, via `/api/chat`, `/api/reset`, `/api/health`, `/api/product-image`); the engine with the key
+unset and with an invalid key; the web UI code; the Telegram bot (static review only, nothing sent).
+All fixes are in `work/` (pristine copy in `original/`). Everything is Python 3.9 compatible (tests run on CPython 3.9.25 and 3.13).
+
+Deliverables: `QA_REPORT.md` (this file), `changes.diff` (`diff -ruN original work`, excluding caches, `.venv`, `data/sessions.json`).
+
+**Test results:** original suite 36 tests -> now **96 tests pass** (60 new regression tests in `tests/test_regressions.py`, 1 existing test
+adjusted — see #8) on Python 3.9.25 and 3.13. All files `py_compile` under 3.9.
+
+## Root cause behind most of the "no product found" failures
+The LLM returns free-text slot values ("clothing", "office wear", "Kurta / Kurti", "m", "₹10,000") and the engine used them raw against
+the catalogue filters. New `src/normalize.py` canonicalises every slot (category, product type, occasion, activity, colour, size, style)
+and the LLM values are *validated against the shopper's own message* (budget must appear in the text, colour terms must appear, size must
+be one parsed from the text, product type must be mentioned) so the LLM can neither invent nor mis-format a hard filter.
+
+## Issues found and fixed
+
+| # | Sev | Issue | Repro (original) | Root cause | Fix (files) | Status |
+|---|---|---|---|---|---|---|
+| 1 | High | "No product found" for personas 1, 4, 5, 6 and any normal request when the LLM is on | "I need a kurta for office under 3000" -> M | LLM slots (category "Ethnic", type "kurta", occasion "office wear") compared raw to catalogue strings | New `normalize.py`; engine merges validated + canonical slots; `filters.py` category/type/occasion matching rewritten | Fixed |
+| 2 | High | Fuzzy spell-correct corrupts ordinary words; substring colour/size matching | "what shades…" -> Footwear ("shades"->"shoes"); "match" -> watch; "distance" -> colour tan; size L matched XL | Over-aggressive edit distance; `in` substring tests | `nlu.py`: conservative Damerau/OSA fuzzy (length/first-letter rules, protected words), word-boundary colour/size matching | Fixed |
+| 3 | High | Multi-size answers fail | "M or L" | Stored as one raw string "M or L" | `normalize.parse_sizes` -> list; `size_matches` accepts any listed size | Fixed |
+| 4 | High | Mid-chat updates wipe slots and re-ask | "change budget to 9000", "actually make it 1700", "change size to L", "change the colour" -> skip | Update intent cleared the field instead of replacing it; no number-preserving parse | `engine._extract_updates/_apply_requirement_change`; `nlu.normalize` keeps digits; only the changed slot moves | Fixed |
+| 5 | High | Handoff lock-in / false handoff | Two frustrated messages -> every later message returns handoff text; "recommend a laptop" triggered handoff via LLM-only `handoff` intent | Sticky `handoff_requested`; LLM intent trusted | One complaint = apologise + simplify; handoff on explicit human request or 2nd consecutive frustration; handoff clears when the shopper makes a real request | Fixed |
+| 6 | High | FAQ matcher misses most FAQs without the LLM and answers wrongly | 26/32 FAQs did not match; "how should I care for sandals/watch/earrings" returned the wrong care FAQ; "how do I wash the X" returned the generic answer | Token overlap too naive | New `faq_match.py` (exact, topic rules, token overlap, question-like gating). **All 32 FAQs now match their own question** (test) | Fixed |
+| 7 | High | Persona 2 (styling) broken | peach dress + dusky skin tone | Owned outfit colour used as hard *product* colour filter; skin tone stored as style; no styling directions | New `outfit_colour`/`neckline` slots (never filter); styling flow gives 3 directions (antique gold / pearls / rose gold), "not fixed rules for any skin tone", asks neckline once, then budget | Fixed |
+| 8 | Med | Occasion lists collapse | "office and daily wear" | Single-value occasion | Multi-value occasion ("office, daily"); the existing `test_nlu` office-typo test now asserts `assertIn("office", …)` (only existing test I changed) | Fixed |
+| 9 | Med | FAQ / product questions pollute slots | "is it real gold?" -> colour gold; "how do I wash the Aarohi Peach Anarkali" -> colour peach | Slot extraction ran on every turn | FAQ and product-Q turns never touch saved preferences; product names are masked before slot extraction ("Peach" in a name is not a colour request) | Fixed |
+| 10 | Med | Accessory upsell logic | "yes"/"no" matched on any "please"/"no"/"show me"; offered repeatedly; accessory mode stuck; re-asked after FAQ | Loose regex, no state | Offer only once, only after the outfit shortlist; yes/no only for short replies; accessory results never leak into outfit results; delivery/FAQ turn does not repeat the offer | Fixed |
+| 11 | Med | No product-specific Q&A | "Is the Ira Pastel Lehenga Set in stock?", "price of Mira Antique Gold Jhumkas", "Do you have Naina in XL?" | Only generic FAQs | `engine._product_question`: price/material/care/sizes/stock/colour/occasion answered from the record, named and with Low stock stated; unlisted size says "not listed" | Fixed |
+| 12 | Med | Off-catalogue requests not declined | perfume, laptop, men's suits | Fell through to filters with stale slots | `_off_catalogue` declines and lists what the catalogue covers; slots untouched | Fixed |
+| 13 | Med | Unsafe / unformatted LLM output | markdown tables and `**bold**` shown raw in the UI; no check for invented prices, delivery dates, injury claims, "real gold", bridal wording; Low stock not guaranteed | LLM text passed straight through | New `guards.py`: strip markdown, reject tables / unlisted amounts / delivery promises / injury or medical claims / precious-metal claims / bridal wording -> deterministic template; `ensure_low_stock_noted` | Fixed |
+| 14 | Med | Bangle size read as budget; bangles treated as bracelets; unlisted bangle size ignored | "bangles under 1500" then "2.6" -> budget 2600; "2.2" silently ignored | Digit parsing; no bangle type | Bangles are their own type, size asked (2.4/2.6/2.8), "2.x" parsed as size, unlisted size reported | Fixed |
+| 15 | Med | "similar"/"cheaper" refinements wrong | "similar to Aarohi Peach Anarkali" returned jewellery and set colour peach; "cheaper dresses" after the accessory list capped to ₹748 (earring price); stale UK size kept after switching to jewellery | "show me" matched as *yes*; refinement used last shown (accessory) prices; slots not reset on category switch | Refinement uses last *outfit* prices when outfits are asked; product-name masking; the seed product is excluded; stale size/category cleared on category/type switch | Fixed |
+| 16 | Med | No-match message misleading | "wedding outfit under 500" -> "lowest-priced match is Noor Pearl Drop Earrings ₹749"; "black" with no black office item blamed the occasion | Diagnosis relaxed with accessories included; fixed relax order | `diagnose_no_match` outfits only; colour -> size -> budget -> occasion; colour message names how many options exist without the colour filter | Fixed |
+| 17 | Med | Footwear shown for plain outfit requests; false "size M listed" for free-size items | "casual outfit under 2000"; saree for size M said "size M is listed" | Filter and explain_match gaps | `clothing_only` rule; `explain_match` says "available as Free size" | Fixed |
+| 18 | Med | Jewellery gift filtered out by occasion | "jewellery for mother's birthday" -> nothing | "birthday" is not a catalogue occasion | Gift flow: recipient slot, occasion not a hard filter for gifts, one style question (traditional/minimal/statement) | Fixed |
+| 19 | Med | Greeting / thanks / FAQ without "?" handled badly while a question is pending | "hi" mid-flow; "what is your return policy" (no "?") while accessory offer pending returned a shortlist | FAQ gate required "?" | Greeting resumes the pending question; FAQ gate only skips real yes/no replies | Fixed |
+| 20 | Med | Web API: no limits, no locking, non-atomic save, unbounded sessions | Any length message/session id; parallel turns on one chat race; killed mid-write corrupts `sessions.json`; file grows forever | None implemented | `web.py`: message 1–1000 chars, session id `^[A-Za-z0-9_.:-]{1,128}$`, per-chat lock, clean 500 on engine error. `session.py`: RLock, atomic temp-file+`os.replace`, 500-session LRU cap, tolerant load of corrupt/unknown fields | Fixed |
+| 21 | Low | LLM reasoning text used as the reply; no client timeout | Empty content -> chain-of-thought shown; hung request freezes chat | `grok_client.py` fallback; no timeout | Removed reasoning fallback; 20 s timeout, 1 retry, 1500 tokens; parse must be a dict; JSON retried once then template | Fixed |
+| 22 | Low | Telegram HTML broken by truncation; no send-error handling; token in logs | Long shortlist cut at 4000 chars inside a tag -> `BadRequest` -> no reply; httpx INFO logs print the bot token in the URL | `text[:4000]`; no handler | `split_message` on paragraph boundaries; plain-text fallback on `BadRequest`; escape titles; httpx/httpcore logs set to WARNING (static fix, not run against Telegram) | Fixed (static) |
+| 23 | Low | UI: crashes if `localStorage` blocked or `crypto.randomUUID` missing (plain-http LAN); reset failure unhandled; broken product image; 422 shows generic error | Open the app over `http://<LAN-ip>:8000` | No fallback | `app.js`: in-memory/fallback session id, reset guarded and disabled while busy, image `onerror` hides it, 422 message; cache-bust `?v=11` | Fixed |
+
+UI review: no XSS — assistant text is set with `textContent`, product fields with `escapeHtml`, chips with `textContent`, and a `<script>`/`<img onerror>`
+message is rendered as inert text and parsed only as shopping text. `product-image` rejects unknown IDs and path tricks (404).
+
+## Tested and passed (after fixes)
+- Six personas (rule-based and live LLM): P1 wedding (budget, M or L, peach/pastel, one jewellery offer), P2 styling, P3 running vs gym priority -> size -> shoes, P4 cocktail (delivery question answered with no date), P5 office/daily, P6 gift (and "is it real gold?" -> no purity claim).
+- Budget boundary inclusive (₹1299 shown at 1299, not at 1298); unstocked sizes (XXS, UK 3, UK 12, bangle 2.2) reported honestly; conflicting needs (wedding under ₹500) explained with the true lowest match.
+- Low stock stated for F003 (checked in both LLM and template paths; enforced for all Low-stock items by `ensure_low_stock_noted`); never states delivery dates; imitation jewellery never called precious; no injury claims.
+- Mid-chat slot updates, FAQs (32/32), product Q&A, off-catalogue, Hindi/Hinglish (shaadi lehenga 9000 ke andar, party dress 3000 tak), typos (sandels, nekclace, cocktial), empty/whitespace/very long input (422 over 1000 chars in the API, 800 in the UI), session reset, 8 concurrent sessions (isolation and valid session file), invalid key (falls back in ~0.5 s per turn, no crash), key unset.
+- Static checks: Python 3.9 syntax everywhere, no `X | Y` runtime unions, no `match`, API key not present in any file in the diff.
+
+## Decided not to fix / needs your decision
+1. **Groq vs xAI:** the code uses Groq (`openai/gpt-oss-120b`); if the brief expects xAI/Grok, say so — the client is OpenAI-compatible so it is an env change (`GROQ_BASE_URL`/model).
+2. **Groq rate limits:** during testing, bursts triggered `RateLimitError`s. The bot degrades to rule-based parsing and template replies (correct but plainer); under 8 parallel chats some turns took 20-30 s (SDK waits on 429 retry). Consider a paid tier or a lower timeout if demoing concurrently.
+3. **Spec vs data counts:** the PDF says 24 products / 18 FAQs; the workbook has 48 / 32. I treated the workbook as the source of truth.
+4. **Shoe gender:** product names say "Women's" (S001, S002, S004, S007) and one "Men's" (S006 FlexRun). Women's catalogue otherwise; the bot does not filter by gender (not asked in the rules).
+5. **Colour as hard filter:** an explicit colour request filters; colour is the first thing relaxed and the no-match message says so. Make it a soft ranking if you prefer.
+6. **XXS / unlisted sizes** are reported as not listed (no nearest-size substitution).
+7. **Out-of-scope chit-chat** ("what's the weather") without an LLM just re-asks the occasion; with the LLM it is declined. Left as is.
+8. **Cosmetic:** `visuals.colour_hex` maps "Rose gold" to plain gold; not changed. Telegram not run live (no messages sent).
+
+## Files changed in `work/`
+New: `src/normalize.py`, `src/faq_match.py`, `src/guards.py`, `tests/test_regressions.py`.
+Modified: `src/engine.py` (rewritten), `src/filters.py`, `src/nlu.py`, `src/grok_client.py`, `src/prompts.py`, `src/session.py`, `src/web.py`, `src/telegram_bot.py`, `web/app.js`, `web/index.html`, `tests/test_nlu.py`.
+
+---
+# Round 2 — stale-slot / no-match loop (user report, session 85a33ac3…)
+
+Reproduced exactly with the reported 15-message chat (rule-based and with an LLM that returns raw values like category "clothing" / product_type "outfit"):
+`office+daily outfits -> 5000 -> L -> change occasion -> festive -> 1000 -> 10000 -> change occasion -> sports or gym -> XL -> "outfit for a festive occasion" -> 10000 -> "casual everyday outfits" -> change budget -> 10000`.
+Before the fix the bot answered "I couldn't find a suitable product for your occasion or activity" from the "outfit for a festive occasion" turn on, and bare "10000" replies never changed the budget.
+
+| # | Sev | Issue | Root cause | Fix (files) | Status |
+|---|---|---|---|---|---|
+| 24 | High | `activity: gym` survives a switch to festive/casual, so occasion AND activity are both required and nothing matches | `_apply_updates` merged new occasion without touching the old activity (and the reverse); the "change occasion" chip cleared both but a fresh request like "I need an outfit for a festive occasion" did not | `engine._apply_updates`: a new occasion clears a stale activity/priority; a new activity clears a stale occasion; a sporty LLM "occasion" alongside an activity is dropped. `filters.diagnose_no_match` can now report `conflict` | Fixed |
+| 25 | High | A bare budget ("10000", "make it…") typed after a no-match is ignored, so "change budget" loops forever | `_parse_budget` treated the pending question "change one requirement (budget, size, colour, or occasion)?" as a *size* question (the word "size" is in it) and refused bare numbers | `engine._parse_budget`: while a change-a-requirement question is pending, a bare number >= 300 is a budget and size is not assumed | Fixed |
+| 26 | High | Old saved sessions stay broken (category `clothing`, product_type `outfit`, size/budget as raw strings) | Slots loaded from `sessions.json` were never re-validated. The current code cannot write those raw values (`normalize_category_and_type("clothing","outfit")` -> `(None, None)`, confirmed with a raw-valued LLM in the new test) so they came from sessions saved by the pre-fix version and loaded back | New `ShopperSlots.canonicalise()` (idempotent), called when `SessionStore` loads and at the start of every turn; raw "clothing/outfit" becomes `scope="clothing"` (outfits only) instead of being dropped silently | Fixed |
+| 27 | Med | Empty-search message says "occasion or activity" without naming the value and re-asks the same generic question | `_no_match_message` used generic labels; no memory of previous empty turns | Message now names the blocker and value ("…nothing matches activity "gym"…", "…within your maximum budget of ₹1000…", colour/size likewise) and, when occasion+activity cannot be combined, says so and asks which to keep. After 2+ consecutive empty turns it says "Still no match — the blocker is the budget, so changing a different requirement won't help". Chips put the real blocker first ("Drop gym", "Keep festive"/"Keep gym") | Fixed |
+| 28 | Med | No way to drop a single filter | Only "change X" (which re-asks) existed | "drop/remove/ignore/forget/clear the gym|colour|size|budget|occasion filter" clears just that slot and re-runs the search (`engine._drop_requested`) | Fixed |
+| 29 | Med | "outfit(s)" requests could mix in shoes/stale types: "It's for sports or gym" while looking for outfits would AND with stale type or return shoes | No notion that the shopper asked for clothes | New `scope="clothing"` slot (set by "outfit/clothes", or by answering the "What is the outfit for?" question); outfit-only filtering for activities; a generic outfit request after shoes/jewellery resets the stale category/type. **Answer to the activewear question:** the catalogue does have gym outfits (F016 Pace Black Training Tights ₹1299, F015 Pulse Mint Gym Set ₹1599, both XS–XL), and "sports or gym" for outfits now routes to them; shoes appear only when shoes are asked for | Fixed |
+| 30 | Med | Stale size of the wrong kind (UK 6 for clothes, M for shoes) and bare sizes ignored after a shortlist | Size kind never rechecked on a search change; "XL" accepted only when a size question was pending | Wrong-kind size dropped when the search family changes (then asked again); a bare "XL"/"try L" updates a running clothing search | Fixed |
+
+Tests: 109 pass (was 96) on Python 3.9.25 and 3.13; 13 new tests in `StaleSlotLoopTests` (exact chat without LLM and with a raw-value LLM, old-session canonicalisation on load and on turn, idempotence, conflict + drop, repeated no-match, size kinds, bare size, outfit-only activity).
+Not changed (decision): stale `style` ("comfortable") from an earlier occasion is kept; it never filters, only appears in the "why" text and ranking.
+Live check: the same chat against the running app with the real Groq LLM — all 15 turns behave like the rule-based run (14 LLM parse calls fell back to rules because of Groq rate limits during the run, which is the designed fallback).

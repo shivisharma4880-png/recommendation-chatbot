@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>Shivi's Product Assistant Bot</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css?v=30" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="site-header">
+        <span class="mark" aria-hidden="true"></span>
+        <div>
+          <h1 id="bot-heading">Shivi's Product Assistant Bot</h1>
+          <p>Catalogue-only fashion recommendations</p>
+        </div>
+      </header>
+      <section class="hero">
+        <p>
+          Browse every product in this catalogue, grouped by category. Open Chat on a piece you are looking at and the
+          assistant will recommend from what is listed here — no invented prices, stock, or delivery dates.
+        </p>
+      </section>
+      <nav id="shelf-nav" class="shelf-nav" aria-label="Catalogue categories"></nav>
+      <div id="shelf" class="shelf">
+        <p class="shelf-status">Loading catalogue…</p>
+      </div>
+    </div>
+
+    <button type="button" id="launcher" class="launcher" aria-label="Open chat">
+      💬 Chat
+    </button>
+    <div id="page-nudge" class="page-nudge" hidden>
+      <p>Need a catalogue shortlist?</p>
+      <button type="button" id="page-nudge-open">Open chat</button>
+      <button type="button" id="page-nudge-dismiss" class="nudge-dismiss" aria-label="Dismiss">×</button>
+    </div>
+
+    <aside id="widget" class="widget closed" aria-label="Product assistant chat">
+      <header class="widget-bar">
+        <div class="who">
+          <span class="avatar" aria-hidden="true"></span>
+          <div>
+            <strong id="widget-name">Shivi</strong>
+            <span id="status">Checking catalogue…</span>
+          </div>
+        </div>
+        <div class="widget-actions">
+          <button type="button" id="new-chat" class="icon-btn" title="New chat" aria-label="New chat">↻</button>
+          <button type="button" id="minimize" class="icon-btn" title="Minimize" aria-label="Minimize chat">–</button>
+        </div>
+      </header>
+
+      <div class="widget-body">
+        <div id="prefs" class="prefs" hidden></div>
+        <div id="thread" class="thread" role="log" aria-live="polite"></div>
+      </div>
+
+      <footer class="widget-foot">
+        <div id="compare-bar" class="compare-bar" hidden>
+          <div class="compare-bar-copy">
+            <strong>Compare</strong>
+            <p id="compare-hint">Select at least two products, or type their names / IDs.</p>
+          </div>
+          <div id="compare-picks" class="compare-picks"></div>
+          <p id="compare-add-label" class="compare-add-label" hidden>Add another from this shortlist</p>
+          <div id="compare-add" class="compare-picks compare-add"></div>
+          <div class="compare-add-row">
+            <label class="sr-only" for="compare-type">Add product name or ID</label>
+            <input id="compare-type" type="text" maxlength="80" placeholder="Type a product name or ID" />
+            <button type="button" id="compare-add-go">Add</button>
+          </div>
+          <div class="compare-bar-actions">
+            <button type="button" id="compare-go" disabled>Compare selected</button>
+            <button type="button" id="compare-clear" class="compare-clear">Clear</button>
+          </div>
+        </div>
+        <div id="prompts" class="prompts"></div>
+        <form id="chat-form">
+          <label class="sr-only" for="message">Message</label>
+          <textarea
+            id="message"
+            name="message"
+            rows="1"
+            maxlength="800"
+            placeholder="What are you looking for?"
+            required
+          ></textarea>
+          <button type="submit" id="send" aria-label="Send">Send</button>
+        </form>
+      </footer>
+    </aside>
+
+    <script src="/static/app.js?v=30"></script>
+  </body>
+</html>
