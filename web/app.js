@@ -261,8 +261,10 @@ function renderPrefs(context) {
   if (context.budget_max) chips.push(`🪙 ₹${context.budget_max}`);
   if (context.size) chips.push(`📏 ${context.size}`);
   if (context.colour) chips.push(`🎨 ${context.colour}`);
-  if (context.category) chips.push(context.category);
-  if (context.product_type) chips.push(context.product_type);
+    if (context.category) chips.push(context.category);
+    const type = String(context.product_type || "").trim();
+    const occasion = String(context.occasion || "").trim().toLowerCase();
+    if (type && type.toLowerCase() !== occasion) chips.push(type);
   if (context.style) chips.push(`◻️ ${context.style}`);
   if (!chips.length) {
     prefs.hidden = true;
@@ -404,6 +406,49 @@ function renderComparison(comparison) {
   return wrap;
 }
 
+function formatCardWhy(why) {
+  const text = String(why || "")
+    .replace(/^Recommended because\s+/i, "")
+    .replace(/\.$/, "")
+    .trim();
+  if (!text) return "";
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function renderAssistantBubble(text, handoff) {
+  const bubble = document.createElement("div");
+  bubble.className = handoff ? "bubble handoff" : "bubble";
+  const lines = String(text || "").split("\n");
+  let items = [];
+  const flushList = () => {
+    if (!items.length) return;
+    const ul = document.createElement("ul");
+    ul.className = "rec-list";
+    items.forEach((item) => {
+      const li = document.createElement("li");
+      li.textContent = item;
+      ul.appendChild(li);
+    });
+    bubble.appendChild(ul);
+    items = [];
+  };
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (/^[-*•–]\s+/.test(trimmed)) {
+      items.push(trimmed.replace(/^[-*•–]\s+/, ""));
+      return;
+    }
+    flushList();
+    if (!trimmed) return;
+    const p = document.createElement("p");
+    p.textContent = line;
+    bubble.appendChild(p);
+  });
+  flushList();
+  if (!bubble.childNodes.length) bubble.textContent = text || "";
+  return bubble;
+}
+
 function renderCarousel(products) {
   const wrap = document.createElement("div");
   wrap.className = "carousel-wrap";
@@ -419,22 +464,26 @@ function renderCarousel(products) {
     const stockClass = String(p.stock_status || "").toLowerCase().includes("low") ? " low" : "";
     const selected = isCompareSelected(p.product_id);
     if (selected) card.classList.add("selected");
+    const why = formatCardWhy(p.why);
     card.innerHTML = `
       <div class="card-visual">
         <img src="${escapeHtml(p.image_url || "")}" alt="${escapeHtml(p.product_name || "")}" loading="lazy">
       </div>
-      <h3>${escapeHtml(p.emoji || "🛍️")} ${escapeHtml(p.product_name)}</h3>
-      <div class="meta">
-        <span class="price">₹${escapeHtml(p.price_inr)}</span>
-        <span>${escapeHtml(p.colour)}</span>
-        <span>Sizes ${escapeHtml(p.sizes)}</span>
-        <span class="stock${stockClass}">${escapeHtml(p.stock_status)}</span>
-      </div>
-      <p>${escapeHtml(p.key_features || "")}</p>
-      ${p.why ? `<p class="why">${escapeHtml(p.why)}</p>` : ""}
-      <div class="card-actions">
-        <button type="button" class="quick" data-msg="Checkout ${escapeHtml(p.product_name)}">Checkout</button>
-        <button type="button" class="quick compare-toggle">${selected ? "Selected" : "Compare"}</button>
+      <div class="card-body">
+        <h3>${escapeHtml(p.product_name)}</h3>
+        <p class="card-id">${escapeHtml(p.product_id)}</p>
+        <div class="meta">
+          <span class="price">₹${escapeHtml(p.price_inr)}</span>
+          ${p.colour ? `<span>${escapeHtml(p.colour)}</span>` : ""}
+          ${p.sizes ? `<span>Sizes ${escapeHtml(p.sizes)}</span>` : ""}
+          <span class="stock${stockClass}">${escapeHtml(p.stock_status)}</span>
+        </div>
+        ${p.key_features ? `<p class="features">${escapeHtml(p.key_features)}</p>` : ""}
+        ${why ? `<p class="why"><span>Why it matches</span>${escapeHtml(why)}</p>` : ""}
+        <div class="card-actions">
+          <button type="button" class="quick primary" data-msg="Checkout ${escapeHtml(p.product_name)}">Checkout</button>
+          <button type="button" class="quick compare-toggle">${selected ? "Selected" : "Compare"}</button>
+        </div>
       </div>
     `;
     const img = card.querySelector("img");
@@ -508,9 +557,12 @@ function productsNamedInReply(text, products) {
 function appendMessage(role, text, products, handoff, comparison, confirmation) {
   const row = document.createElement("div");
   row.className = `row ${role}`;
-  const bubble = document.createElement("div");
-  bubble.className = handoff ? "bubble handoff" : "bubble";
-  bubble.textContent = text;
+  const bubble =
+    role === "assistant" ? renderAssistantBubble(text, handoff) : document.createElement("div");
+  if (role !== "assistant") {
+    bubble.className = "bubble";
+    bubble.textContent = text;
+  }
   row.appendChild(bubble);
 
   if (confirmation) {

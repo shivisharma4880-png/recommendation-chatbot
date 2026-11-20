@@ -111,10 +111,6 @@ PRIORITY_FOLLOW_UPS = [
     {"title": "Running", "emoji": "🏃", "text": "Running is the priority"},
     {"title": "Gym", "emoji": "🏋️", "text": "Gym is the priority"},
 ]
-INTAKE_FAQS = [
-    {"title": "Delivery", "emoji": "📦", "text": "How long will delivery take?"},
-    {"title": "In stock?", "emoji": "✅", "text": "Are these products in stock?"},
-]
 BANGLE_SIZE_FOLLOW_UPS = [
     {"title": "2.4", "text": "Bangle size 2.4"},
     {"title": "2.6", "text": "Bangle size 2.6"},
@@ -660,13 +656,13 @@ class RecommendationEngine:
             if "traditional, minimal or statement" in q:
                 return GIFT_STYLE_FOLLOW_UPS
             if "budget" in q:
-                return BUDGET_FOLLOW_UPS + INTAKE_FAQS
+                return BUDGET_FOLLOW_UPS
             if "bangle size" in q:
                 return BANGLE_SIZE_FOLLOW_UPS
             if "uk shoe" in q:
-                return SHOE_SIZE_FOLLOW_UPS + INTAKE_FAQS
+                return SHOE_SIZE_FOLLOW_UPS
             if "size" in q:
-                return SIZE_FOLLOW_UPS + INTAKE_FAQS
+                return SIZE_FOLLOW_UPS
             if "running or gym" in q:
                 return PRIORITY_FOLLOW_UPS
             if "outfit for" in q or "occasion" in q:
@@ -795,19 +791,16 @@ class RecommendationEngine:
         return data
 
     def _template_recommendations(self, products: list[Product], slots: ShopperSlots) -> str:
-        heading = (
-            "Here are catalogue options to browse:"
-            if slots.intent == "browse"
-            else "Here are options from our catalogue:"
-        )
+        desc = self._request_desc(slots)
+        if slots.intent == "browse":
+            heading = f"Here are catalogue options to browse{f' for {desc}' if desc else ''}."
+        else:
+            heading = f"Here are catalogue matches{f' for {desc}' if desc else ''}."
         recap = self._preference_recap(slots)
-        lines = [f"{recap} {heading}".strip() if recap else heading]
-        for p in products:
-            why = explain_match(p, slots)
-            lines.append(
-                f"• {p.product_name} ({p.product_id}) — ₹{p.price_inr}, sizes {p.sizes_raw}, "
-                f"{p.stock_status}. {why}"
-            )
+        lines = [part for part in (recap, heading) if part]
+        lines.append("")
+        for product in products:
+            lines.append(f"• {product.product_name} ({product.product_id})")
         return "\n".join(lines)
 
     def _request_desc(self, slots: ShopperSlots, omit: tuple = ()) -> str:
@@ -1373,7 +1366,8 @@ class RecommendationEngine:
             "Use ONLY the catalogue records provided (from the Excel sheet). "
             "Do not invent products, prices, sizes, or stock. "
             "If a product is not in the list, do not mention it. "
-            "Name every provided product on its own • line, in the given order. "
+            "Name every provided product on its own • line as '• Product Name (ID)' only, in the given order. "
+            "Do not put prices, sizes, stock, or why-it-matches on those lines — the product cards show that. "
             "Do not skip, replace, or reorder them — the product cards follow this list."
         )
 
@@ -1445,30 +1439,29 @@ class RecommendationEngine:
     ) -> str:
         if not product_dicts:
             return fallback
-        if not self.grok.available:
-            return fallback
-        try:
-            reply = self.grok.compose_reply(
-                slots.to_context_dict(),
-                product_dicts,
-                self._grok_instruction(slots, instruction),
-            )
-        except Exception as exc:
-            logger.warning("LLM reply failed (%s); using template", type(exc).__name__)
-            return fallback
-        reply = guards.strip_markdown(reply or "")
-        if not self._reply_uses_only_catalogue(reply, product_dicts):
-            self.last_guard_failure = "unknown product"
-            return fallback
-        if not self._reply_covers_shortlist(reply, product_dicts):
-            self.last_guard_failure = "shortlist mismatch"
-            logger.info("LLM reply omitted shortlist items; using template")
-            return fallback
-        problem = guards.violation(reply, product_dicts, slots.budget_max, user_text)
-        if problem:
-            self.last_guard_failure = problem
-            logger.info("LLM reply rejected (%s); using template", problem)
-            return fallback
+        reply = fallback
+        if self.grok.available:
+            try:
+                drafted = self.grok.compose_reply(
+                    slots.to_context_dict(),
+                    product_dicts,
+                    self._grok_instruction(slots, instruction),
+                )
+                drafted = guards.strip_markdown(drafted or "")
+                if not self._reply_uses_only_catalogue(drafted, product_dicts):
+                    self.last_guard_failure = "unknown product"
+                elif not self._reply_covers_shortlist(drafted, product_dicts):
+                    self.last_guard_failure = "shortlist mismatch"
+                    logger.info("LLM reply omitted shortlist items; using template")
+                else:
+                    problem = guards.violation(drafted, product_dicts, slots.budget_max, user_text)
+                    if problem:
+                        self.last_guard_failure = problem
+                        logger.info("LLM reply rejected (%s); using template", problem)
+                    else:
+                        reply = drafted
+            except Exception as exc:
+                logger.warning("LLM reply failed (%s); using template", type(exc).__name__)
         return guards.ensure_low_stock_noted(reply, product_dicts)
 
     def _apply_memory_refinements(self, message: str, slots: ShopperSlots, updates: Optional[dict] = None) -> bool:
@@ -1551,7 +1544,7 @@ class RecommendationEngine:
         if slots.neckline is None and not wants_earrings_only:
             picks = self._styling_pick(slots, "earrings", 3)
             dicts = [self._product_payload(p, slots) for p in picks]
-            lines = [f"• {p.product_name} ({p.product_id}) — ₹{p.price_inr}, {p.colour}, {p.stock_status}" for p in picks]
+            lines = [f"• {p.product_name} ({p.product_id})" for p in picks]
             body = intro
             if lines:
                 body += "\n\nEarrings from the catalogue in those directions:\n" + "\n".join(lines)
@@ -1569,7 +1562,7 @@ class RecommendationEngine:
                 question=CHANGE_REQUIREMENT_QUESTION,
             )
         dicts = [self._product_payload(p, slots) for p in picks]
-        lines = [f"• {p.product_name} ({p.product_id}) — ₹{p.price_inr}, {p.colour}, {p.material}, {p.stock_status}" for p in picks]
+        lines = [f"• {p.product_name} ({p.product_id})" for p in picks]
         faq24 = next((f for f in self.faqs if f.question.lower().startswith("how should i choose a necklace")), None)
         neck = ""
         if slots.neckline and slots.neckline != "not specified":
@@ -1782,13 +1775,14 @@ class RecommendationEngine:
         if offer_now:
             slots.offered_accessories = True
             instruction = (
-                "Present the outfit shortlist (2-3 items). End by asking once if they want "
-                "matching jewellery or a clutch. Do not add accessories yet."
+                "Write a short intro, then list each outfit as '• Product Name (ID)' only. "
+                "End by asking once if they want matching jewellery or a clutch. Do not add accessories yet."
             )
         else:
             instruction = (
-                "Present the shortlist. For each product, use its why field to explain the match "
-                "in one short phrase. Mention saved preferences only if they appear in that why field."
+                "Write a short intro that reflects the shopper's request. "
+                "Then list each product as '• Product Name (ID)' only. "
+                "Do not repeat the why field in the list; it appears on the cards."
             )
         if any(p.category == "Footwear" for p in shortlist) and len(shortlist) > 1:
             instruction += " Add one short trade-off note (price, listed features or tags only); no health or injury claims."

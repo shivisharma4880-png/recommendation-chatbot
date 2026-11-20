@@ -35,8 +35,11 @@ class DiscoveryTests(unittest.TestCase):
         result = self.engine.handle_turn("d", "I need casual everyday outfits, size M, budget 2000", slots)
         self.assertTrue(result.products)
         self.assertTrue(all(p.get("why") for p in result.products))
-        self.assertIn("recommended because", result.reply.lower())
+        self.assertIn("recommended because", result.products[0]["why"].lower())
         self.assertIn("saved preferences", result.reply.lower())
+        for product in result.products:
+            self.assertIn(product["product_name"], result.reply)
+            self.assertIn(product["product_id"], result.reply)
 
     def test_session_memory_keeps_budget_and_refines(self):
         path = Path(tempfile.mkdtemp()) / "sessions.json"

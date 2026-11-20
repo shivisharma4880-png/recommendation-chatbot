@@ -236,6 +236,8 @@ class CatalogueTests(unittest.TestCase):
         self.assertIn("budget", first.reply.lower())
         titles = [item["title"] for item in first.follow_ups]
         self.assertIn("Under ₹1,000", titles)
+        self.assertNotIn("Delivery", titles)
+        self.assertNotIn("In stock?", titles)
         second = engine.handle_turn("t", "1000", slots)
         self.assertEqual(slots.budget_max, 1000)
         self.assertNotIn("maximum budget", second.reply.lower())
